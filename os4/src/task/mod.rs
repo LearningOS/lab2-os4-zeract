@@ -24,6 +24,9 @@ pub use task::{TaskControlBlock, TaskStatus};
 use crate::config::MAX_SYSCALL_NUM;
 pub use context::TaskContext;
 use crate::timer::get_time_us;
+use crate::mm::{MapPermission,VirtAddr,VirtPageNum};
+use crate::mm::address::StepByOne;
+use crate::mm::address::VPNRange;
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -55,9 +58,12 @@ lazy_static! {
         let num_app = get_num_app();
         info!("num_app = {}", num_app);
         let mut tasks: Vec<TaskControlBlock> = Vec::new();
+        //println!("the number is {}",num_app);
         for i in 0..num_app {
             tasks.push(TaskControlBlock::new(get_app_data(i), i));
+            //println!("the task number is {}",i);
         }
+        //println!("come here mod!");
         TaskManager {
             num_app,
             inner: unsafe {
@@ -167,6 +173,66 @@ impl TaskManager {
         let current = inner.current_task;
         inner.tasks[current].call_num[syscall_id]+=1;
     }
+    fn mmap_malloc(&self,_start: usize, _len: usize, _port: usize) -> isize{
+        if _len ==0{
+            return 0;
+        }
+        if _start%4096 !=0{
+            return -1;
+        }
+        if _port & (!0x7) != 0{
+            return -1;
+        }
+        if _port & 0x7 ==0{
+            return -1;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+        let start: VirtAddr  = VirtAddr(_start).floor().into(); 
+        let end_vpn:VirtAddr  = VirtAddr::from(_start+_len).ceil().into();
+        if memory_set.check_va_overlap(start.into(), end_vpn.into()){
+            return -1;
+        }
+        let mut permission = MapPermission::from_bits((_port as u8) << 1).unwrap();
+        permission.set(MapPermission::U, true);
+        memory_set.insert_framed_area(start.into(),end_vpn.into(),permission);
+        0
+
+    }
+    fn unmap_unalloc(&self,_start: usize, _len: usize) -> isize{
+        if _len ==0{
+            return 0;
+        }
+        if _start%4096 !=0{
+            return -1;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let memory_set = &mut inner.tasks[current].memory_set;
+        let mut start = _start; 
+        let end = start+_len;
+        while start <end{
+            let start_va = VirtAddr::from(start);
+            let mut vpn = VirtAddr::from(start).floor();
+            vpn.step();
+            let mut end_va: VirtAddr = vpn.into();
+            end_va = end_va.min(VirtAddr::from(end));
+            let pte = memory_set.translate(vpn);
+            match Some(pte){
+                None => return -1,
+                _ => (),
+            }
+            
+            let mut index =0;
+            let success =  memory_set.unmap(start_va,end_va);
+            if success ==false{
+                return -1;
+            }
+            start = end_va.into();
+        }
+        0
+    }
 
 }
 
@@ -222,4 +288,10 @@ pub fn get_current_num() -> [u32;MAX_SYSCALL_NUM]{
 }
 pub fn add_current_num(syscall_id:usize){
     TASK_MANAGER.add_current_num(syscall_id);
+}
+pub fn mmap_malloc(_start: usize, _len: usize, _port: usize) -> isize{
+    TASK_MANAGER.mmap_malloc(_start,_len,_port)
+}
+pub fn unmap_unalloc(_start:usize,_len:usize) -> isize{
+    TASK_MANAGER.unmap_unalloc(_start,_len)
 }
