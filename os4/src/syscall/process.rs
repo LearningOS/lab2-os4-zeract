@@ -3,10 +3,8 @@
 use crate::config::MAX_SYSCALL_NUM;
 use crate::task::{exit_current_and_run_next, suspend_current_and_run_next, TaskStatus};
 use crate::timer::get_time_us;
-use crate::task::{get_current_num,get_current_time};
-use crate::mm::translated_byte_buffer;
+use crate::task::{get_current_num,get_current_time,mmap_malloc,unmap_unalloc};
 use crate::task::current_user_token;
-use core::mem::size_of;
 use crate::mm::{VirtAddr, PhysAddr, PageTable};
 #[repr(C)]
 #[derive(Debug)]
@@ -36,6 +34,7 @@ pub fn sys_yield() -> isize {
 
 // YOUR JOB: 引入虚地址后重写 sys_get_time
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+    
     let _us = get_time_us();
     let page_table = PageTable::from_token(current_user_token());
     let ptr = _ts as usize;
@@ -55,7 +54,9 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     buffers[9+offset] = ((usec>>8)&0xff) as u8;
     buffers[10+offset] = ((usec>>16)&0xff) as u8;
     buffers[11+offset] = ((usec>>24)&0xff) as u8;
+    
     0
+    
 }
 
 // CLUE: 从 ch4 开始不再对调度算法进行测试~
@@ -65,15 +66,18 @@ pub fn sys_set_priority(_prio: isize) -> isize {
 
 // YOUR JOB: 扩展内核以实现 sys_mmap 和 sys_munmap
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    -1
+    
+   mmap_malloc(_start,_len,_port)
+    
 }
 
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    -1
+    unmap_unalloc(_start,_len)
 }
 
 // YOUR JOB: 引入虚地址后重写 sys_task_info
 pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
+    
     let page_table = PageTable::from_token(current_user_token());
     let ptr = ti as usize;
     let va = VirtAddr::from(ptr);
@@ -81,7 +85,7 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
     let ppn = page_table.translate(vpn).unwrap().ppn();
     let buffers = ppn.get_bytes_array();
     let offset = va.page_offset();
-    let pa:PhysAddr = ppn.from();
+    let pa:PhysAddr = ppn.into();
     unsafe {
         let task_info = ((pa.0 + offset) as *mut TaskInfo).as_mut().unwrap();
         let tmp = TaskInfo{
@@ -91,5 +95,6 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
         };
         *task_info = tmp;
     }
+    
     0
 }
